@@ -14,8 +14,8 @@ jobs:
 
       - name: Install Firedrake and echemfem
         run: |
-          python -m pip install -e .
-          pip install sphinx-rtd-theme
+          python3 -m pip install -e .
+          pip3 install sphinx-rtd-theme
       - name: Build docs
         run: |
           cd docs
