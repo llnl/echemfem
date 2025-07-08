@@ -10,19 +10,26 @@ jobs:
       volumes:
         - ${{ github.workspace }}:/home/firedrake/output
     steps:
-      - uses: actions/checkout@v3
-      - name: Install checkedout Firedrake
+      - uses: actions/checkout@v4
+        with:
+          path: firedrake-repo
+
+      - name: Install Firedrake and echemfem
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          : # Pass '--system-site-packages' so already installed packages can be found
+          python3 -m venv --system-site-packages venv
+          . venv/bin/activate
+          pip uninstall -y firedrake
+          pip install --verbose './firedrake-repo[docs]'
           python -m pip install -e .
           pip install sphinx-rtd-theme
       - name: Build docs
         run: |
-          . /home/firedrake/firedrake/bin/activate
+          . venv/bin/activate
           cd docs
           make html
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           name: github-pages
           path: /__w/echemfem/echemfem/docs/build/html
@@ -40,4 +47,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2
+        uses: actions/deploy-pages@v4
