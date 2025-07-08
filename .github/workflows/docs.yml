@@ -5,27 +5,19 @@ jobs:
   build_docs:
     runs-on: ubuntu-latest
     container:
-      image: firedrakeproject/firedrake-docdeps:latest
+      image: firedrakeproject/firedrake:latest
       options: --user root
       volumes:
         - ${{ github.workspace }}:/home/firedrake/output
     steps:
       - uses: actions/checkout@v4
-        with:
-          path: firedrake-repo
 
       - name: Install Firedrake and echemfem
         run: |
-          : # Pass '--system-site-packages' so already installed packages can be found
-          python3 -m venv --system-site-packages venv
-          . venv/bin/activate
-          pip uninstall -y firedrake
-          pip install --verbose './firedrake-repo[docs]'
           python -m pip install -e .
           pip install sphinx-rtd-theme
       - name: Build docs
         run: |
-          . venv/bin/activate
           cd docs
           make html
       - name: Upload artifact
