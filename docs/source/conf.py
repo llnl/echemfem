@@ -3,11 +3,11 @@
 # -- Project information
 
 project = 'EchemFEM'
-copyright = u'2022-2024, Lawrence Livermore National Laboratory'
+copyright = u'2022-2025, Lawrence Livermore National Laboratory'
 author = 'Thomas Roy'
 
 release = '0.1'
-version = '0.0.1'
+version = '0.0.2'
 
 # -- General configuration
 

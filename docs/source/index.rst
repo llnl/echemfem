@@ -33,7 +33,7 @@ Copyright and License
 
 Please see this `LICENSE file <https://github.com/LLNL/echemfem/blob/main/LICENSE>`_ for details.
 
-Copyright (c) 2022-2024, Lawrence Livermore National Security, LLC.
+Copyright (c) 2022-2025, Lawrence Livermore National Security, LLC.
 Produced at the Lawrence Livermore National Laboratory.
 
 LLNL-CODE-837342
