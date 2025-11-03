@@ -2162,7 +2162,7 @@ class EchemSolver(ABC):
         if solid:
             for echem in self.echem_params:
                 a += av * test_fn * echem["reaction"](u) * self.dx()
-        elif not solid and self.flow["poisson"]:
+        elif not solid and self.flow["poisson"] and self.flow["porous"]:
             for echem in self.echem_params:
                 a -= av * test_fn * echem["reaction"](u) * self.dx()
 
@@ -2185,7 +2185,6 @@ class EchemSolver(ABC):
                     print("Reactions in solid Poisson. for test only")
                     a -= reactions[n_r] * test_fn * self.dx()
 
-        is_inlet = (inlet is not None) and solid
         is_bulk = (bulk is not None) and (not solid)
         applied = self.boundary_markers.get("applied")
         is_applied = applied is not None
@@ -2195,16 +2194,15 @@ class EchemSolver(ABC):
             else:
                 is_applied = self.boundary_markers.get(
                     "liquid applied") is not None
-        if is_inlet or is_bulk or is_applied:
-            if is_applied:
-                U_0 = self.U_app
-                dirichlet = applied
-            elif is_inlet:
-                U_0 = self.U_app
-                dirichlet = inlet
-            elif is_bulk:
-                U_0 = Constant(0)
-                dirichlet = bulk
+        dirichlets = []
+        if is_bulk:
+            dirichlets.append((bulk, Constant(0)))
+        if is_applied:
+            dirichlets.append((applied, self.U_app))
+        for diric in dirichlets:
+            dirichlet = diric[0]
+            U_0 = diric[1]
+
             if family == "DG":
                 a += inner(K_U * (U_0 - U) * n, grad(test_fn)) * self.ds(dirichlet)
                 a -= inner(K_U * grad(U), n * test_fn) * self.ds(dirichlet)
