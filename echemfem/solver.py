@@ -372,7 +372,8 @@ class EchemSolver(ABC):
         # setup applied voltage
         if physical_params.get("U_app") is not None:
             U_app = physical_params["U_app"]
-            if isinstance(U_app, (Constant, Function)):
+            U_app_ufl = physical_params.get("U_app_ufl") # keep UFL expression
+            if isinstance(U_app, (Constant, Function)) or U_app_ufl:
                 self.U_app = U_app
             elif isinstance(U_app, (float, int)):
                 self.U_app = Constant(U_app)
@@ -609,7 +610,10 @@ class EchemSolver(ABC):
             if self.flow["porous"] and (
                     self.flow["electroneutrality"] or self.flow["poisson"] or self.flow["electroneutrality full"]):
                 u.sub(i_Ul).assign(Constant(0))
-                u.sub(i_Us).assign(self.U_app)
+                try:
+                    u.sub(i_Us).assign(self.U_app)
+                except:
+                    u.sub(i_Us).interpolate(self.U_app)
                 if initial_solve:
                     Wu = self.Vu * self.Vu
                     U0 = Function(Wu)
@@ -645,7 +649,11 @@ class EchemSolver(ABC):
             elif (self.flow["electroneutrality"] or self.flow["poisson"] or self.flow["electroneutrality full"]):
                 U0 = Function(self.Vu)
                 if hasattr(self, "U_app"):
-                    U0.assign(self.U_app / 2)
+                    try:
+                        U0.assign(self.U_app / 2)
+                    except:
+                        U0.interpolate(self.U_app / 2)
+
                 if initial_solve:
                     v0 = TestFunction(self.Vu)
                     u0 = [us[i] for i in range(self.num_mass)]
@@ -2691,6 +2699,11 @@ class TransientEchemSolver(EchemSolver):
         a = (C - C_old) / self.dt * test_fn * dx()
         return a, []
 
+    def update(self):
+        """Overwrite this method to perform a custom operation at each timestep
+        """
+        pass
+
     def solve(self, times):
         """Solves the transient problem and outputs the solutions
 
@@ -2699,12 +2712,14 @@ class TransientEchemSolver(EchemSolver):
 
         """
 
+        self.u_old.assign(self.u)
         if self.save_solutions:
             self.output_state(self.u, time=times[0])
         for i in range(len(times))[1:]:
             self.dt.assign(times[i] - times[i-1])  # calculate timestep
             self.time.assign(times[i])  # this works for Backward Euler
             self.echem_solver.solve()
+            self.update()
             self.u_old.assign(self.u)
 
             if self.save_solutions:
