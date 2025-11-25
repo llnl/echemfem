@@ -1678,6 +1678,7 @@ class EchemSolver(ABC):
                     idx_app = liquid_applied
                 else:
                     idx_app = applied
+            # sign of z could determine direction of flow, usually in the absence of advection
             if idx_app is not None:
                 a += conditional(dot(flow, n) < 0, test_fn
                                  * dot(flow, n) * C_0, 0.0) * self.ds(idx_app)
