@@ -10,6 +10,7 @@ Here is a brief overview of the examples in `echemfem/examples <https://github.c
     * `2D case for three-ion electrolyte <https://github.com/LLNL/echemfem/tree/main/examples/bortels_threeion.py>`_ (:math:`\ce{CuSO4}` and :math:`\ce{H2SO4}`)
     * `Nondimensional version of three ion case <https://github.com/LLNL/echemfem/tree/main/examples/bortels_threeion_nondim.py>`_ 
     * `3D version of the three-ion case using custom preconditioners for a Discontinuous Galerkin (DG) scheme, and nondimensional <https://github.com/LLNL/echemfem/tree/main/examples/bortels_threeion_extruded_3D_nondim.py>`_ 
+    * `A transient version of the 2D case for three-ion electrolyte <https://github.com/LLNL/echemfem/tree/main/examples/bortels_threeion_transient.py>`_
 
 * Simple 1D reaction-diffusion system for :math:`\ce{CO2}` electrolysis in :math:`\ce{KHCO3}`
     
@@ -27,6 +28,8 @@ Here is a brief overview of the examples in `echemfem/examples <https://github.c
 
     * `Using substitution of the electroneutrality equation to eliminate a species <https://github.com/LLNL/echemfem/tree/main/examples/catalyst_layer_Cu.py>`_
     * `Solving the electroneutrality equation explicitly <https://github.com/LLNL/echemfem/tree/main/examples/catalyst_layer_Cu_full.py>`_
+
+* `A transient 1D example for :math:`\ce{CO2}` electrolysis on copper with a pulsating applied voltage using advection-diffusion-migration <https://github.com/LLNL/echemfem/tree/main/examples/bicarb_Cu_transient_example.py>`_
 
 * `A simple Vanadium flow battery using advection-diffusion-reaction, Poisson for the ionic potential with a predefinied conductivity and Navier-Stokes-Brinkman for the flow <https://github.com/LLNL/echemfem/tree/main/examples/simple_flow_battery.py>`_
 
