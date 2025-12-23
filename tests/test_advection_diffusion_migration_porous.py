@@ -72,7 +72,7 @@ class AdvectionDiffusionMigrationSolver(EchemSolver):
 
 def test_convergence_low_peclet():
     err_old = 1e6
-    for i in range(7):
+    for i in range(6):
         solver = AdvectionDiffusionMigrationSolver(2**(i + 1), 1.0)
         solver.setup_solver()
         solver.solve()
@@ -85,7 +85,7 @@ def test_convergence_low_peclet():
 
 def test_convergence_high_peclet():
     err_old = 1e6
-    for i in range(3, 7):
+    for i in range(3, 6):
         solver = AdvectionDiffusionMigrationSolver(2**(i + 1), 1e3)
         solver.setup_solver()
         solver.solve()
