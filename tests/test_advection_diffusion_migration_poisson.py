@@ -4,26 +4,14 @@ from echemfem import EchemSolver
 
 
 class DiffusionMigrationSolver(EchemSolver):
-    def __init__(self, N, extruded=False, gmg=False):
-        if extruded and gmg:
-            plane_mesh = UnitSquareMesh(N, N, quadrilateral=True)
-            plane_mesh_hierarchy = MeshHierarchy(plane_mesh, 1)
-            extruded_hierarchy = ExtrudedMeshHierarchy(
-                plane_mesh_hierarchy, 1.0, 2)
-            mesh = extruded_hierarchy[-1]
-            x, y, _ = SpatialCoordinate(mesh)
-        elif extruded:
-            plane_mesh = UnitSquareMesh(N, N, quadrilateral=True)
-            mesh = ExtrudedMesh(plane_mesh, N, 1.0 / N)
-            x, y, _ = SpatialCoordinate(mesh)
-        else:
-            # Create an initial coarse mesh
-            initial_mesh = UnitSquareMesh(2, 2, quadrilateral=True)
-            # Create a mesh hierarchy with uniform refinements
-            hierarchy = MeshHierarchy(initial_mesh, N)
-            # Use the finest mesh for the initial discretization
-            mesh = hierarchy[-1]
-            x, y = SpatialCoordinate(mesh)
+    def __init__(self, N):
+        # Create an initial coarse mesh
+        initial_mesh = UnitSquareMesh(2, 2, quadrilateral=True)
+        # Create a mesh hierarchy with uniform refinements
+        hierarchy = MeshHierarchy(initial_mesh, N)
+        # Use the finest mesh for the initial discretization
+        mesh = hierarchy[-1]
+        x, y = SpatialCoordinate(mesh)
 
         conc_params = []
 
@@ -73,9 +61,6 @@ class DiffusionMigrationSolver(EchemSolver):
         }
 
         super().__init__(conc_params, physical_params, mesh)
-        # Select a geometric multigrid preconditioner to make use of the
-        # MeshHierarchy
-        self.init_solver_parameters(pc_type="gmg")
 
     def set_boundary_markers(self):
         self.boundary_markers = {"bulk dirichlet": (1, 2, 3, 4,),
@@ -99,10 +84,10 @@ class DiffusionMigrationSolver(EchemSolver):
                 (x_vel, Constant(0.)))
 
 
-def test_convergence(extruded=False, gmg=False):
+def test_convergence():
     err_old = 1e6
     for i in range(3):
-        solver = DiffusionMigrationSolver(2**(i + 1), extruded, gmg)
+        solver = DiffusionMigrationSolver(i+1)
         solver.setup_solver()
         solver.solve()
         c1, c2, U = solver.u.subfunctions
@@ -112,4 +97,3 @@ def test_convergence(extruded=False, gmg=False):
         err_old = err
 
 
-test_convergence(extruded=True, gmg=True)
