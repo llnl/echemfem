@@ -10,6 +10,16 @@ from cubic_spline_coeffs import cubic_spline_coeffs, cubic_spline
 import argparse
 import traceback
 import os
+
+"""
+1D example of CO2R on copper using the GMPNP model and using splines to interpolate artificial data.
+
+Separate CO2R and COR fluxes, which can come from microkinetics models.
+Data used here is artificial, for demonstration purposes.
+The spline utility functions can also be used to interpolate experimental data.
+"""
+
+
 print = PETSc.Sys.Print
 
 parser = argparse.ArgumentParser(add_help=False)

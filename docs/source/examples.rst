@@ -38,3 +38,5 @@ Here is a brief overview of the examples in `echemfem/examples <https://github.c
 * `A tandem flow-past the electrode system with an Ag catalyst placed in front of a Cu catalyst with electroneutral Nernst-Planck and Tafel kinetics <https://github.com/LLNL/echemfem/tree/main/examples/bicarb_Ag_Cu_tandem_example.py>`_
 
 * `Simple example for the BMCSL model for finite size ion effects <https://github.com/LLNL/echemfem/tree/main/examples/BMCSL.py>`_
+
+* `A 1D example of :math:`\ce{CO2}` electrolysis on copper using the GMPNP model and interpolating artificial data using splines <https://github.com/LLNL/echemfem/tree/main/examples/advanced_examples/CO2R_splines/Cu_1D_CO2R_COR_artificial_splines.py>`_
