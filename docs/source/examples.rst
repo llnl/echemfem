@@ -29,10 +29,7 @@ Here is a brief overview of the examples in `echemfem/examples <https://github.c
     * `Using substitution of the electroneutrality equation to eliminate a species <https://github.com/LLNL/echemfem/tree/main/examples/catalyst_layer_Cu.py>`_
     * `Solving the electroneutrality equation explicitly <https://github.com/LLNL/echemfem/tree/main/examples/catalyst_layer_Cu_full.py>`_
 
-* `A transient 1D example for :math:`\ce{CO2}` electrolysis on copper with a pulsating applied voltage using advection-diffusion-migration`__
-
-__ https://github.com/LLNL/echemfem/tree/main/examples/bicarb_Cu_transient_example.py
-
+* `A transient 1D example for CO2 electrolysis on copper with a pulsating applied voltage using advection-diffusion-migration <https://github.com/LLNL/echemfem/tree/main/examples/bicarb_Cu_transient_example.py>`_
 
 * `A simple Vanadium flow battery using advection-diffusion-reaction, Poisson for the ionic potential with a predefinied conductivity and Navier-Stokes-Brinkman for the flow <https://github.com/LLNL/echemfem/tree/main/examples/simple_flow_battery.py>`_
 
@@ -42,6 +39,4 @@ __ https://github.com/LLNL/echemfem/tree/main/examples/bicarb_Cu_transient_examp
 
 * `Simple example for the BMCSL model for finite size ion effects <https://github.com/LLNL/echemfem/tree/main/examples/BMCSL.py>`_
 
-* `A 1D example of :math:`\ce{CO2}` electrolysis on copper using the GMPNP model and interpolating artificial data using splines`__
-
-__ https://github.com/LLNL/echemfem/tree/main/examples/advanced_examples/CO2R_splines/Cu_1D_CO2R_COR_artificial_splines.py
+* `A 1D example of CO2 electrolysis on copper using the GMPNP model and interpolating artificial data using splines <https://github.com/LLNL/echemfem/tree/main/examples/advanced_examples/CO2R_splines/Cu_1D_CO2R_COR_artificial_splines.py>`_
