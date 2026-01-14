@@ -4,7 +4,7 @@ Guo, J., Roy, T., Govindarajan, N., Varley, J.B., Raisin, J., Lee, J., Jang, J.,
 ------------NOTE: This branch is not actively maintained/updated.--------------------
 
 Simulation cases in the corresponding paper were run using with the following software versions:
-Firedrake version: firedrake-0.13.0  (+5725.g397ddfa0a) <UPDATE AS NEEDED, not sure I'm getting the right version from my install>
+Firedrake version: firedrake-0.13.0  (+5725.g397ddfa0a)
 Python version: 3.10.8
 EchemFEM commit: f22206bc81a3675aab748885aeb1f5d62247e386, Thu Nov 14 12:14:55 2024 -0800; see the EchemFEM GitHub for documentation, installation, and usage instructions.
 
@@ -166,4 +166,5 @@ python <FORWARD SCRIPT NAME.py> <V_final> <flow_rate> >> output_log_file.log
 
 or, in parallel with p processors:
 mpiexec -n p python <FORWARD SCRIPT NAME.py> <V_final> <flow_rate> >> output_log_file.log
+
 
