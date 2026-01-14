@@ -1,0 +1,169 @@
+The collection of files here provide the scripts to run an optimization case, with further details found in the corresponding paper:
+Guo, J., Roy, T., Govindarajan, N., Varley, J.B., Raisin, J., Lee, J., Jang, J., Lee, D.U., Jaramillo, T.F. and Lin, T.Y., 2025. Optimized tandem catalyst patterning for CO $ _2 $ reduction flow reactors. arXiv preprint arXiv:2511.07638.
+
+------------NOTE: This branch is not actively maintained/updated.--------------------
+
+Simulation cases in the corresponding paper were run using with the following software versions:
+Firedrake version: firedrake-0.13.0  (+5725.g397ddfa0a) <UPDATE AS NEEDED, not sure I'm getting the right version from my install>
+Python version: 3.10.8
+EchemFEM commit: f22206bc81a3675aab748885aeb1f5d62247e386, Thu Nov 14 12:14:55 2024 -0800; see the EchemFEM GitHub for documentation, installation, and usage instructions.
+
+
+---------------------------------------------------------------------------------------------------------------
+
+
+
+List of files provided:
+ 
+1. This document (Notes.txt) giving an overview of what is in this branch and what files are included.
+
+2. Optimization script file (OPT_script_with_documentation.py) with the optimization capability (to find the optimized section lengths given an initial pattern and number of sections). Strong regularization (smaller S sharpening parameter value) is used, and the following species are omitted from the electroneutral NP system to save on computational cost: H2, C2H4, C2H6O, CH4.
+Comments are provided within the file.
+
+The script is run using the following command on the command line:
+python OPT_script_with_documentation.py <n_sections> <objective: current/FE> <V_final> <flow_rate> >> output_log_file.log
+
+or, in parallel with p processors:
+mpiexec -n p python OPT_script_with_documentation.py <n_sections> <objective: current/FE> <V_final> <flow_rate> >> output_log_file.log
+
+
+3. An example list of lengths of sections for the optimized pattern (opt_length_list.txt) for N = 8 sections. The length values are taken from the results of the optimization script file; this file is then used as the input of the forward script.
+
+---------------------------------------------------------------------------------------------------------------
+
+
+The final forward script file is not provided for brevity: it can be created from the optimization script file, with the following changes in OPT_script_with_documentation.py:
+
+A. Remove the rho_input from the CarbonateSolver definition:
+--------------------In line 150:
+change
+def __init__(self, rho_input = None):
+to
+def __init__(self):
+
+
+B. Read in the data from opt_length_list.txt rather than by using the command line for number of sections and the objective and by computing length_list from rho_input:
+
+--------------------Replace lines 29 through 32 with the following lines:
+
+n_sections = 8##<UPDATE THIS WITH THE NUMBER OF SECTIONS IN opt_length_list.txt>
+print('num sections (manually changed in code): ',n_sections)
+##want n_sections to be even for now
+if n_sections % 2 != 0:
+    print(f"WARNING: The number {n_sections} is odd.")
+
+
+--------------------Replace lines 192 through 212 with the following lines:
+
+
+        length_list = [Constant(0.) for i in range(n_sections)]
+        
+        # Read the numbers from the text file and assign them to length_list
+        with open("opt_length_list.txt", "r") as file:
+            for i, line in enumerate(file):
+                # Remove brackets and whitespace, then convert the number to float
+                number = float(line.strip().replace("[", "").replace("]", ""))
+                # Assign the number as a Constant to the corresponding index in length_list
+                length_list[i] = Constant(number)
+        
+        #now, compute last element to make sure that section lengths add up to Lx (eliminates issues due to rounding)
+        length_list[-1] = Constant(Lx) - Constant(sum(length_list[i] for i in range(n_sections-1)))
+
+        print('printing length_list in CarbonateSolver class: ')
+        for index in range(len(length_list)):
+            print(Constant(length_list[index]).dat.data)
+        
+        #check that the length of length_list = n_sections
+        if len(length_list) == n_sections:
+            print(f"The length of the list matches n_sections: len(length_list) = {len(length_list)}, n_sections = {n_sections}.")
+        else:
+            raise ValueError(f"Error: The length of the list ({len(length_list)}) does not match n_sections ({n_sections}).")
+
+C. Switch to weak regularization (larger S sharpening parameter value); on line 234, increase sharpening_factor to a larger value.
+
+D. Use all considered species are solved for in the electroneutral NP system (reintroduce H2, C2H4, C2H6O, CH4 through CarbonateSolver where previously commented out). Be sure to comment out those original lines corresponding to the parts needed for optimization when switching (comment out line 401, uncomment line 400, for example).
+
+E. Adjust end of file after CarbonateSolver() by removing optimization and only having the forward solve part:
+
+--------------------Remove lines 698 through the end of the file, and replace with the following:
+
+solver = CarbonateSolver()
+solver.U_app.assign(Vcell)
+solver.setup_solver()
+
+n = FacetNormal(solver.mesh)
+solver.solve()
+cCO2, cOH, cHCO3, cCO3, cH, cH2, cCO, cC2H4, cC2H6O, cCH4, phi2 = solver.u.split()
+
+Vlist = np.append(np.linspace(-1.35,-1.55,num=21),np.linspace(-1.555,-1.75,num=40))
+Vlist = Vlist[Vlist>=-V_final]
+if -V_final not in Vlist: Vlist = np.append(Vlist,-V_final)
+
+jCO = []
+jH2_Ag = []
+jC2H4 = []
+jC2H6O = []
+jH2_Cu = []
+jCH4 = []
+
+
+for Vs in Vlist:
+    solver.U_app.assign(Vs)
+    print("V = %d mV" % np.rint(Vs * 1000))
+    solver.solve()
+    cCO2, cOH, cHCO3, cCO3, cH, cH2, cCO, cC2H4, cC2H6O, cCH4, phi2 = solver.u.subfunctions ##go back to this version (all species are included)
+
+    print('printing domain-averaged i_CO')
+    iCO_avg = assemble(solver.echem_params[0]["reaction"](solver.u.subfunctions)*ds(3))/assemble(Constant(1) * ds(3, domain=solver.mesh))
+    jCO.append(iCO_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+    print(iCO_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+
+    print('printing domain-averaged i_H2_Ag')
+    iH2_Ag_avg = assemble(solver.echem_params[1]["reaction"](solver.u.subfunctions)*ds(3))/assemble(Constant(1) * ds(3, domain=solver.mesh))
+    jH2_Ag.append(iH2_Ag_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+    print(iH2_Ag_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+
+    print('printing domain-averaged i_C2H4')
+    iC2H4_avg = assemble(solver.echem_params[2]["reaction"](solver.u.subfunctions)*ds(3))/assemble(Constant(1) * ds(3, domain=solver.mesh))
+    jC2H4.append(iC2H4_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+    print(iC2H4_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+
+    print('printing domain-averaged i_C2H6O')
+    iC2H6O_avg = assemble(solver.echem_params[3]["reaction"](solver.u.subfunctions)*ds(3))/assemble(Constant(1) * ds(3, domain=solver.mesh))
+    jC2H6O.append(iC2H6O_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+    print(iC2H6O_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+
+    print('printing domain-averaged i_H2_Cu')
+    iH2_Cu_avg = assemble(solver.echem_params[4]["reaction"](solver.u.subfunctions)*ds(3))/assemble(Constant(1) * ds(3, domain=solver.mesh))
+    jH2_Cu.append(iH2_Cu_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+    print(iH2_Cu_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+
+    print('printing domain-averaged i_CH4')
+    iCH4_avg = assemble(solver.echem_params[5]["reaction"](solver.u.subfunctions)*ds(3))/assemble(Constant(1) * ds(3, domain=solver.mesh))
+    jCH4.append(iCH4_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+    print(iCH4_avg * (La.dat.data + Lx.dat.data + Lb.dat.data) / (Lx.dat.data))
+
+    ##rename results folder so that I can save for each voltage
+    base_dir = os.getcwd()
+    os.chdir(base_dir)
+    name_new_results_dir = "results_V_s_"+str(Vs)+"/"
+    if rank == 0:
+        dest = shutil.move("results",name_new_results_dir)
+
+np.savetxt('U_SHE.tsv', Vlist)    
+np.savetxt('jCO.tsv',jCO)
+np.savetxt('jC2H4.tsv',jC2H4)
+np.savetxt('jC2H6O.tsv',jC2H6O)
+np.savetxt('jH2_Ag.tsv',jH2_Ag)
+np.savetxt('jH2_Cu.tsv',jH2_Cu)
+np.savetxt('jCH4.tsv',jCH4)
+
+---------------------------------------------------------------------------------------------------------------
+---------------------------------------------------------------------------------------------------------------
+
+The forward script is now run using the following command on the command line:
+python <FORWARD SCRIPT NAME.py> <V_final> <flow_rate> >> output_log_file.log
+
+or, in parallel with p processors:
+mpiexec -n p python <FORWARD SCRIPT NAME.py> <V_final> <flow_rate> >> output_log_file.log
+
