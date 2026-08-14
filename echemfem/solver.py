@@ -1518,7 +1518,12 @@ class EchemSolver(ABC):
         elif self.echem_params:
             F = self.physical_params["F"]
 
-        if self.flow["diffusion"]:
+        # bool to ignore finite size effect of a particular species with parameter "point particle"
+        search_string = "finite size"
+        is_finite_size = any(search_string in f for f in self.flow)
+        point_particle = is_finite_size and conc_params.get("point particle")
+
+        if self.flow["diffusion"] or point_particle:
             # diffusion
             a += inner(D * grad(C), grad(test_fn)) * self.dx()
             if family == "DG":
@@ -1548,7 +1553,7 @@ class EchemSolver(ABC):
                 bcs.append(DirichletBC(self.W.sub(i_c), C_gas, gas))
 
             # TODO: define this term outside this function for efficiency?
-            if self.flow["finite size"]:
+            if self.flow["finite size"] and not point_particle:
                 NA = self.physical_params["Avogadro constant"]
                 denominator = 1.0
                 numerator = 0.0
@@ -1559,7 +1564,7 @@ class EchemSolver(ABC):
                         numerator += NA * ai ** 3 * grad(u[i])
                 a += D * C * inner(numerator / denominator, grad(test_fn)) * self.dx()
 
-        if self.flow["diffusion finite size_BK"]:
+        if self.flow["diffusion finite size_BK"] and not point_particle:
             NA = self.physical_params["Avogadro constant"]
             phi = 0.0
             for i in range(n_c):
@@ -1571,7 +1576,7 @@ class EchemSolver(ABC):
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
 
-        if self.flow["diffusion finite size_CS"]:
+        if self.flow["diffusion finite size_CS"] and not point_particle:
             NA = self.physical_params["Avogadro constant"]
             phi = 0.0
             for i in range(n_c):
@@ -1583,7 +1588,7 @@ class EchemSolver(ABC):
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
 
-        if self.flow["diffusion finite size_SP"]:
+        if self.flow["diffusion finite size_SP"] and not point_particle:
             NA = self.physical_params["Avogadro constant"]
             phi = 0.0
             for i in range(n_c):
@@ -1595,7 +1600,7 @@ class EchemSolver(ABC):
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
 
-        if self.flow["diffusion finite size_SMPNP"]:
+        if self.flow["diffusion finite size_SMPNP"] and not point_particle:
             NA = self.physical_params["Avogadro constant"]
             phi = 0.0
             a0 = 2.3e-10    # Size of water molecule
@@ -1615,7 +1620,7 @@ class EchemSolver(ABC):
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
 
-        if self.flow["diffusion finite size_BMCSL"]:
+        if self.flow["diffusion finite size_BMCSL"] and not point_particle:
             NA = self.physical_params["Avogadro constant"]
             psi3 = 0.0
             psi0 = 0.0
