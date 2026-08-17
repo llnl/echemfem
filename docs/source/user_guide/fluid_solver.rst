@@ -111,11 +111,13 @@ keys.
   u_\mathrm{out}`, which is passed in ``fluid_params`` as ``"outlet
   velocity"``.
 
-* ``"inlet pressure"``: Sets inlet velocity, :math:`p = p_\mathrm{in}`, which
-  is passed in ``fluid_params`` as ``"inlet pressure"``.
+* ``"inlet pressure"``: Sets an inlet pressure traction using
+  :math:`p_\mathrm{in}`, which is passed in ``fluid_params`` as
+  ``"inlet pressure"``.
 
-* ``"outlet pressure"``: Sets outlet pressure, :math:`p = p_\mathrm{out}`,
-  which is passed in ``fluid_params`` as ``"outlet pressure"``.
+* ``"outlet pressure"``: Sets an outlet pressure traction using
+  :math:`p_\mathrm{out}`, which is passed in ``fluid_params`` as
+  ``"outlet pressure"``.
 
 Numerical considerations
 ------------------------

@@ -1,7 +1,18 @@
 from abc import ABC
+from numbers import Real
 from firedrake import *
 from petsc4py import PETSc
 pprint = PETSc.Sys.Print
+
+
+def _mesh_topological_dimension(mesh):
+    dim = mesh.topological_dimension
+    return dim() if callable(dim) else dim
+
+
+def _is_zero(value):
+    return isinstance(value, Real) and value == 0
+
 
 class FlowSolver(ABC):
     """Base class for a flow solver.
@@ -24,7 +35,7 @@ class FlowSolver(ABC):
 
     def __init__(self, mesh, fluid_params, boundary_markers):
         self.mesh = mesh
-        self.dim = mesh.topological_dimension()
+        self.dim = _mesh_topological_dimension(mesh)
         self.fluid_params = fluid_params
         self.boundary_markers = boundary_markers
         self.setup_functions()
@@ -67,13 +78,6 @@ class FlowSolver(ABC):
         if self.boundary_markers.get("outlet velocity"):
            bcs.append(DirichletBC(Z.sub(0), params["outlet velocity"],
                                   self.boundary_markers["outlet velocity"]))
-        if self.boundary_markers.get("outlet pressure"):
-           bcs.append(DirichletBC(Z.sub(1), params["outlet pressure"],
-                                  self.boundary_markers["outlet pressure"]))
-        if self.boundary_markers.get("inlet pressure"):
-           bcs.append(DirichletBC(Z.sub(1), params["inlet pressure"],
-                                  self.boundary_markers["inlet pressure"]))
-
         if self.boundary_markers.get("inlet pressure") or self.boundary_markers.get("outlet pressure"):
             self.nullspace = None
         else:
@@ -142,12 +146,14 @@ class NavierStokesFlowSolver(FlowSolver):
                 n = FacetNormal(self.mesh)
                 in_id = self.boundary_markers["inlet pressure"]
                 p_in = params["inlet pressure"]
-                F -= inner(1/self.Re * dot(grad(u), n) - p_in * n, v) * ds(in_id)
+                if not _is_zero(p_in):
+                    F -= inner(-p_in * n, v) * ds(in_id)
             if self.boundary_markers.get("outlet pressure"):
                 n = FacetNormal(self.mesh)
                 out_id = self.boundary_markers["outlet pressure"]
                 p_out = params["outlet pressure"]
-                F -= inner(1/self.Re * dot(grad(u), n) - p_out * n, v) * ds(out_id)
+                if not _is_zero(p_out):
+                    F -= inner(-p_out * n, v) * ds(out_id)
         # dimensional Navier-Stokes
         else:
             pprint("Using dimensional Navier-Stokes")
@@ -164,12 +170,14 @@ class NavierStokesFlowSolver(FlowSolver):
                 n = FacetNormal(self.mesh)
                 in_id = self.boundary_markers["inlet pressure"]
                 p_in = params["inlet pressure"]
-                F -= inner(nu * dot(grad(u), n) - 1.0/rho * p_in * n, v) * ds(in_id)
+                if not _is_zero(p_in):
+                    F -= inner(-1.0/rho * p_in * n, v) * ds(in_id)
             if self.boundary_markers.get("outlet pressure"):
                 n = FacetNormal(self.mesh)
                 out_id = self.boundary_markers["outlet pressure"]
                 p_out = params["outlet pressure"]
-                F -= inner(nu * dot(grad(u), n) - 1.0/rho * p_out * n, v) * ds(out_id)
+                if not _is_zero(p_out):
+                    F -= inner(-1.0/rho * p_out * n, v) * ds(out_id)
 
         self.Form = F
 
@@ -250,12 +258,14 @@ class NavierStokesBrinkmanFlowSolver(FlowSolver):
                 n = FacetNormal(self.mesh)
                 in_id = self.boundary_markers["inlet pressure"]
                 p_in = params["inlet pressure"]
-                F -= inner(1/self.Re * dot(grad(u), n) - p_in * n, v) * ds(in_id)
+                if not _is_zero(p_in):
+                    F -= inner(-p_in * n, v) * ds(in_id)
             if self.boundary_markers.get("outlet pressure"):
                 n = FacetNormal(self.mesh)
                 out_id = self.boundary_markers["outlet pressure"]
                 p_out = params["outlet pressure"]
-                F -= inner(1/self.Re * dot(grad(u), n) - p_out * n, v) * ds(out_id)
+                if not _is_zero(p_out):
+                    F -= inner(-p_out * n, v) * ds(out_id)
         # dimensional Navier-Stokes-Brinkman
         else:
             pprint("Using dimensional Navier-Stokes-Brinkman")
@@ -285,11 +295,13 @@ class NavierStokesBrinkmanFlowSolver(FlowSolver):
                 n = FacetNormal(self.mesh)
                 in_id = self.boundary_markers["inlet pressure"]
                 p_in = params["inlet pressure"]
-                F -= inner(nu_eff * dot(grad(u), n) - 1.0/rho * p_in * n, v) * ds(in_id)
+                if not _is_zero(p_in):
+                    F -= inner(-1.0/rho * p_in * n, v) * ds(in_id)
             if self.boundary_markers.get("outlet pressure"):
                 n = FacetNormal(self.mesh)
                 out_id = self.boundary_markers["outlet pressure"]
                 p_out = params["outlet pressure"]
-                F -= inner(nu_eff * dot(grad(u), n) - 1.0/rho * p_out * n, v) * ds(out_id)
+                if not _is_zero(p_out):
+                    F -= inner(-1.0/rho * p_out * n, v) * ds(out_id)
 
         self.Form = F

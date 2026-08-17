@@ -30,6 +30,11 @@ def gauss_lobatto_legendre_cube_rule(dimension, degree):
     return result
 
 
+def _mesh_topological_dimension(mesh):
+    dim = mesh.topological_dimension
+    return dim() if callable(dim) else dim
+
+
 class EchemSolver(ABC):
     """Base class for an electrochemical model solver.
 
@@ -199,7 +204,7 @@ class EchemSolver(ABC):
             print = PETSc.Sys.Print
             print("Using cylindrical coordinates")
             # cylindrical coordinates with azimuthal symmetry (2D mesh)
-            if mesh.topological_dimension() != 2:
+            if _mesh_topological_dimension(mesh) != 2:
                 raise NotImplementedError(
                     'Cylindrical coordinates require a 2D mesh')
             r, z = SpatialCoordinate(mesh)
