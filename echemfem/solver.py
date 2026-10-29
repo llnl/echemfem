@@ -2652,6 +2652,7 @@ class TransientEchemSolver(EchemSolver):
     def setup_forms(self, us, v):
         """ Setup weak forms for transient case
         """
+        print = PETSc.Sys.Print
         print("Using transient form")
 
         self.dt = Constant(1)
@@ -2678,6 +2679,7 @@ class TransientEchemSolver(EchemSolver):
         Form = 0
         bcs = []
 
+        print = PETSc.Sys.Print
         print("Adding transient form")
         # mass conservation of aqueous species
         for i in range(self.num_liquid):
@@ -2705,6 +2707,7 @@ class TransientEchemSolver(EchemSolver):
             u=None):
         """Returns weak form of a mass accumulation term for an aqueous species.
         """
+        print = PETSc.Sys.Print
         print("Adding accum form")
 
         a = (C - C_old) / self.dt * test_fn * dx()
