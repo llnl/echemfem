@@ -157,7 +157,7 @@ class PorousSolver(EchemSolver):
                              "boundary": "catalyst",
                              })
 
-        super().__init__(conc_params, physical_params, mesh, echem_params=echem_params, family="CG", cylindrical=True)
+        super().__init__(conc_params, physical_params, mesh, echem_params=echem_params, family="CG", coordinates="cylindrical")
 
     def set_boundary_markers(self):
         self.boundary_markers = {"gas": (3,),  # C = C_gas

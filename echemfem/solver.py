@@ -6,7 +6,9 @@ from petsc4py import PETSc
 from mpi4py import MPI
 from pyop2.mpi import COMM_WORLD
 import pandas
-from echemfem import CylindricalMeasure
+from echemfem import CylindricalMeasure, SphericalMeasure
+from typing import Literal
+import warnings
 
 import FIAT
 import finat
@@ -56,7 +58,11 @@ class EchemSolver(ABC):
         family (str, optional): Finite element family. Choose between "CG" and "DG".
         p_penalty (str, optional): Polynomial degree of the DG penalization. Only used for P-multigrid.,
         SUPG (bool, optional): Streamline upwind diffusion for stablization of the advection-migration term. Only used for CG.
-        cylindrical (bool, optional): if True, uses symmetric cylindrical coordinates (r, z).
+        cylindrical (bool, optional): if True, uses symmetric cylindrical coordinates (r, z.)
+            Deprecated. Use coordiantes="cylindrical" instead.
+        coordinates (Literal["cartesian", "cylindrical", "spherical"], optional):
+            Coordinate system. If "cylindrical" uses symmetric cylindrical coordinates (r, z).
+            If "spherical" uses spherical coordinates (r, theta).
     """
 
     def __init__(
@@ -73,7 +79,8 @@ class EchemSolver(ABC):
             family="DG",
             p_penalty=None,
             SUPG=False,
-            cylindrical=False):
+            cylindrical=False,
+            coordinates=None):
 
         self.physical_params = physical_params
         self.conc_params = conc_params
@@ -201,6 +208,17 @@ class EchemSolver(ABC):
         quadrature_rule = None
         quadrature_rule_face = None
         if cylindrical:
+            warnings.warn(
+                "cylindrical is deprecated; use coordinates='cylindrical' instead.",
+                category=DeprecationWarning,
+                stacklevel=2,
+            )
+            if coordinates != "cylindrical":
+                warnings.warn(
+                    f"cylindrical set to True but coordinate system is specified as {coordinates}."
+                    " Changing to cylindrical coordinates.")
+            coordinates = "cylindrical"
+        if coordinates == "cylindrical":
             print = PETSc.Sys.Print
             print("Using cylindrical coordinates")
             # cylindrical coordinates with azimuthal symmetry (2D mesh)
@@ -211,6 +229,17 @@ class EchemSolver(ABC):
             _dx = CylindricalMeasure(r, 'cell')
             _ds = CylindricalMeasure(r, 'exterior_facet')
             _dS = CylindricalMeasure(r, 'interior_facet')
+        elif coordinates == "spherical":
+            print = PETSc.Sys.Print
+            print("Using spherical coordinates")
+            # spherical coordinates with polar symmetry (2D mesh)
+            if _mesh_topological_dimension(mesh) != 2:
+                raise NotImplementedError(
+                    'Spherical coordinates require a 2D mesh')
+            r, theta = SpatialCoordinate(mesh)
+            _dx = SphericalMeasure(r, theta, 'cell')
+            _ds = SphericalMeasure(r, theta, 'exterior_facet')
+            _dS = SphericalMeasure(r, theta, 'interior_facet')
         else:
             _dx = dx
             _ds = ds

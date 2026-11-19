@@ -68,7 +68,7 @@ class DiffusionMigrationSolver(EchemSolver):
                                  }
 
     def set_velocity(self):
-        if self.mesh.geometric_dimension() == 3:
+        if self.mesh.geometric_dimension == 3:
             _, y, _ = SpatialCoordinate(self.mesh)
         else:
             _, y = SpatialCoordinate(self.mesh)
@@ -76,7 +76,7 @@ class DiffusionMigrationSolver(EchemSolver):
         h = 1.0
         x_vel = 6. * self.physical_params["v_avg"] / h**2 * y * (h - y)
 
-        if self.mesh.geometric_dimension() == 3:
+        if self.mesh.geometric_dimension == 3:
             self.vel = as_vector(
                 (x_vel, Constant(0.), Constant(0.)))
         else:

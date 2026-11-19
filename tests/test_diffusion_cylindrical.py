@@ -33,7 +33,7 @@ class DiffusionSolver(EchemSolver):
                            "bulk reaction": f,
                            }
 
-        super().__init__(conc_params, physical_params, mesh, family=family, cylindrical=True)
+        super().__init__(conc_params, physical_params, mesh, family=family, coordinates="cylindrical")
 
     def set_boundary_markers(self):
         self.boundary_markers = {"bulk dirichlet": (2, 3, 4),
