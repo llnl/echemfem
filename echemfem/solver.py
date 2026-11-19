@@ -213,7 +213,7 @@ class EchemSolver(ABC):
                 category=DeprecationWarning,
                 stacklevel=2,
             )
-            if coordinates != "cylindrical":
+            if coordinates is not None and coordinates != "cylindrical":
                 warnings.warn(
                     f"cylindrical set to True but coordinate system is specified as {coordinates}."
                     " Changing to cylindrical coordinates.")
