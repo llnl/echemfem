@@ -1,97 +1,59 @@
-import numbers
-
-from itertools import chain
-
 from ufl.measure import Measure
 from ufl.core.expr import Expr
-from ufl.checks import is_true_ufl_scalar
 from ufl.constantvalue import as_ufl
-from ufl.domain import extract_domains
 
 
-class CylindricalMeasure(Measure):
-    def __init__(self, radius, *args, **kwargs):
-        self.radius = radius
+class _WeightedMeasure(Measure):
+    """Apply a coordinate weight while leaving integral construction to UFL."""
+
+    def __init__(self, *args, **kwargs):
+        # UFL releases before intersection measures do not accept this keyword.
+        if not hasattr(Measure, "intersect_measures"):
+            intersections = kwargs.pop("intersect_measures", None)
+            if intersections:
+                raise NotImplementedError("This UFL version does not support intersection measures.")
         super().__init__(*args, **kwargs)
 
+    def _measure_parameters(self, integral_type=None, subdomain_id=None,
+                            domain=None, metadata=None, subdomain_data=None,
+                            intersect_measures=None):
+        parameters = {
+            "integral_type": self.integral_type() if integral_type is None else integral_type,
+            "domain": self.ufl_domain() if domain is None else domain,
+            "subdomain_id": self.subdomain_id() if subdomain_id is None else subdomain_id,
+            "metadata": self.metadata() if metadata is None else metadata,
+            "subdomain_data": self.subdomain_data() if subdomain_data is None else subdomain_data,
+        }
+        if hasattr(Measure, "intersect_measures"):
+            parameters["intersect_measures"] = (
+                self.intersect_measures() if intersect_measures is None else intersect_measures)
+        elif intersect_measures:
+            raise NotImplementedError("This UFL version does not support intersection measures.")
+        return parameters
+
     def __rmul__(self, integrand):
-        """Multiply a scalar expression with measure to construct a form with
-        a single integral.
-
-        This is to implement the notation
-
-            form = integrand * self.radius * self
-
-        Integration properties are taken from this Measure object.
-
-        """
-        # Avoid circular imports
-        from ufl.integral import Integral
-        from ufl.form import Form
-
-        # Allow python literals: 1*dx and 1.0*dx
         if isinstance(integrand, (int, float)):
             integrand = as_ufl(integrand)
-
-        # Let other types implement multiplication with Measure if
-        # they want to (to support the dolfin-adjoint TimeMeasure)
         if not isinstance(integrand, Expr):
             return NotImplemented
+        # A plain measure also avoids applying the weight twice when UFL splits
+        # a tuple of subdomain IDs into separate integrals. Its domain inference
+        # sees the coordinate weight, so literal integrands such as 1*dx work.
+        measure = Measure(**self._measure_parameters())
+        return measure.__rmul__(self.jacobian * integrand)
 
-        # Allow only scalar integrands
-        if not is_true_ufl_scalar(integrand):
-            raise ValueError(
-                "Can only integrate scalar expressions. The integrand is a "
-                f"tensor expression with value shape {integrand.ufl_shape} and "
-                f"free indices with labels {integrand.ufl_free_indices}.")
 
-        # If we have a tuple of domain ids build the integrals one by
-        # one and construct as a Form in one go.
-        subdomain_id = self.subdomain_id()
-        if isinstance(subdomain_id, tuple):
-            return Form(list(chain(*((integrand * self.reconstruct(subdomain_id=d)).integrals()
-                                     for d in subdomain_id))))
+class CylindricalMeasure(_WeightedMeasure):
+    """Axisymmetric cylindrical integration, per unit azimuthal angle."""
 
-        # Check that we have an integer subdomain or a string
-        # ("everywhere" or "otherwise", any more?)
-        if not isinstance(subdomain_id, (str, numbers.Integral,)):
-            raise ValueError("Expecting integer or string domain id.")
+    def __init__(self, radius, *args, **kwargs):
+        self.radius = radius
+        self.jacobian = radius
+        super().__init__(*args, **kwargs)
 
-        # If we don't have an integration domain, try to find one in
-        # integrand
-        domain = self.ufl_domain()
-        if domain is None:
-            domains = extract_domains(integrand)
-            if len(domains) == 1:
-                domain, = domains
-            elif len(domains) == 0:
-                raise ValueError("This integral is missing an integration domain.")
-            else:
-                raise ValueError("Multiple domains found, making the choice of integration domain ambiguous.")
-
-        # Otherwise create and return a one-integral form
-        integral = Integral(integrand=self.radius*integrand,
-                            integral_type=self.integral_type(),
-                            domain=domain,
-                            subdomain_id=subdomain_id,
-                            metadata=self.metadata(),
-                            subdomain_data=self.subdomain_data())
-        return Form([integral])
-
-    def reconstruct(self,
-                    integral_type=None,
-                    subdomain_id=None,
-                    domain=None,
-                    metadata=None,
-                    subdomain_data=None):
-        if subdomain_id is None:
-            subdomain_id = self.subdomain_id()
-        if domain is None:
-            domain = self.ufl_domain()
-        if metadata is None:
-            metadata = self.metadata()
-        if subdomain_data is None:
-            subdomain_data = self.subdomain_data()
-        return CylindricalMeasure(self.radius, self.integral_type(),
-                                  domain=domain, subdomain_id=subdomain_id,
-                                  metadata=metadata, subdomain_data=subdomain_data)
+    def reconstruct(self, integral_type=None, subdomain_id=None, domain=None,
+                    metadata=None, subdomain_data=None, intersect_measures=None):
+        return CylindricalMeasure(
+            self.radius,
+            **self._measure_parameters(integral_type, subdomain_id, domain,
+                                      metadata, subdomain_data, intersect_measures))

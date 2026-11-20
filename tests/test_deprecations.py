@@ -1,43 +1,50 @@
+import warnings
+
 import pytest
 from firedrake import *
 from echemfem import EchemSolver
 
-with pytest.deprecated_call(
-        match="cylindrical is deprecated; use coordinates='cylindrical' instead."):
-    class DiffusionSolver(EchemSolver):
-        def __init__(self, N, family="DG"):
-            mesh = UnitSquareMesh(N, N, quadrilateral=True)
-            conc_params = []
 
-            r, z = SpatialCoordinate(mesh)
-            C1ex = sin(z) + cos(r)
-            C2ex = cos(z) * cos(r) + sin(z) * cos(r)
-            # need dC/dr = 0 at r=0
-            self.C1ex = C1ex
-            self.C2ex = C2ex
+class DiffusionSolver(EchemSolver):
+    def __init__(self, **kwargs):
+        mesh = UnitSquareMesh(1, 1, quadrilateral=True)
+        mesh.coordinates.dat.data[:, 0] += 1.
+        concentrations = [{"name": "C", "diffusion coefficient": 1.,
+                           "bulk": Constant(1.)}]
+        super().__init__(concentrations, {"flow": ["diffusion"]}, mesh,
+                         family="CG", **kwargs)
+        self.save_solutions = False
 
-            def f(C):
-                f1 = sin(r)/r + cos(r) + sin(z)
-                f2 = (r * cos(r) + sin(r)) * (cos(z) + sin(z))/r + cos(r) * (cos(z) + sin(z))
-                return [f1, f2]
+    def set_boundary_markers(self):
+        self.boundary_markers = {"bulk dirichlet": (1, 2, 3, 4)}
 
-            conc_params.append({"name": "C1",
-                                "diffusion coefficient": 1.0,
-                                "bulk": C1ex,
-                                })
 
-            conc_params.append({"name": "C2",
-                                "diffusion coefficient": 1.0,
-                                "bulk": C2ex,
-                                })
-            physical_params = {"flow": ["diffusion"],
-                            "bulk reaction": f,
-                            }
+@pytest.mark.parametrize("coordinates", (None, "cylindrical"))
+def test_cylindrical_flag_is_deprecated(coordinates):
+    with pytest.deprecated_call(
+            match="cylindrical is deprecated; use coordinates='cylindrical' instead."):
+        solver = DiffusionSolver(cylindrical=True, coordinates=coordinates)
+    assert assemble(1 * solver.dx(domain=solver.mesh)) == pytest.approx(1.5)
 
-            super().__init__(conc_params, physical_params, mesh, family=family, cylindrical=True)
 
-        def set_boundary_markers(self):
-            self.boundary_markers = {"bulk dirichlet": (2, 3, 4),
-                                        }
+@pytest.mark.parametrize("coordinates", ("cartesian", "spherical"))
+def test_cylindrical_flag_overrides_conflicting_coordinates(coordinates):
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        solver = DiffusionSolver(cylindrical=True, coordinates=coordinates)
+    assert any(issubclass(w.category, DeprecationWarning)
+               and "cylindrical is deprecated" in str(w.message)
+               for w in recorded)
+    assert any(issubclass(w.category, UserWarning)
+               and "Changing to cylindrical coordinates" in str(w.message)
+               for w in recorded)
+    assert assemble(1 * solver.dx(domain=solver.mesh)) == pytest.approx(1.5)
 
-    solver = DiffusionSolver(N=1)
+
+@pytest.mark.parametrize("coordinates", (None, "cartesian", "cylindrical"))
+def test_coordinates_option_does_not_emit_legacy_warning(coordinates):
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        DiffusionSolver(coordinates=coordinates)
+    assert not any("cylindrical is deprecated" in str(w.message)
+                   for w in recorded)
