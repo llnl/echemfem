@@ -1256,7 +1256,7 @@ class EchemSolver(ABC):
                     s = reaction["stoichiometry"][name]
                     order = abs(s) # default
                     if reaction.get("reaction order"):
-                        if reaction["reaction order"].get(name):
+                        if reaction["reaction order"].get(name) is not None:
                             order = reaction["reaction order"][name]
                     a = u[self.i_c[name]] / c_ref
                     if s < 0:
