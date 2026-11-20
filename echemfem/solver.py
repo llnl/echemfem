@@ -5,8 +5,11 @@ from firedrake import *
 from petsc4py import PETSc
 from mpi4py import MPI
 from pyop2.mpi import COMM_WORLD
+from ufl.checks import is_cellwise_constant
 import pandas
-from echemfem import CylindricalMeasure
+from echemfem import CylindricalMeasure, SphericalMeasure
+from typing import Literal
+import warnings
 
 import FIAT
 import finat
@@ -56,7 +59,14 @@ class EchemSolver(ABC):
         family (str, optional): Finite element family. Choose between "CG" and "DG".
         p_penalty (str, optional): Polynomial degree of the DG penalization. Only used for P-multigrid.,
         SUPG (bool, optional): Streamline upwind diffusion for stablization of the advection-migration term. Only used for CG.
-        cylindrical (bool, optional): if True, uses symmetric cylindrical coordinates (r, z).
+        cylindrical (bool, optional): if True, uses symmetric cylindrical coordinates (r, z.)
+            Deprecated. Use coordinates="cylindrical" instead.
+        coordinates (Literal["cartesian", "cylindrical", "spherical"], optional):
+            Coordinate system. If "cylindrical" uses symmetric cylindrical coordinates (r, z).
+            If "spherical" uses axisymmetric spherical coordinates (r, theta),
+            with r >= 0 and polar angle 0 <= theta <= pi. Vector quantities
+            use physical radial and polar components. Integrals are per unit
+            azimuthal angle for both cylindrical and spherical coordinates.
     """
 
     def __init__(
@@ -73,7 +83,8 @@ class EchemSolver(ABC):
             family="DG",
             p_penalty=None,
             SUPG=False,
-            cylindrical=False):
+            cylindrical=False,
+            coordinates: Literal["cartesian", "cylindrical", "spherical"] = None):
 
         self.physical_params = physical_params
         self.conc_params = conc_params
@@ -203,6 +214,21 @@ class EchemSolver(ABC):
         quadrature_rule = None
         quadrature_rule_face = None
         if cylindrical:
+            warnings.warn(
+                "cylindrical is deprecated; use coordinates='cylindrical' instead.",
+                category=DeprecationWarning,
+                stacklevel=2,
+            )
+            if coordinates is not None and coordinates != "cylindrical":
+                warnings.warn(
+                    f"cylindrical set to True but coordinate system is specified as {coordinates}."
+                    " Changing to cylindrical coordinates.")
+            coordinates = "cylindrical"
+        if coordinates not in (None, "cartesian", "cylindrical", "spherical"):
+            raise ValueError(f"Unknown coordinate system: {coordinates}")
+        self.coordinates = coordinates or "cartesian"
+        quadrature_degree = p + 1
+        if coordinates == "cylindrical":
             print = PETSc.Sys.Print
             print("Using cylindrical coordinates")
             # cylindrical coordinates with azimuthal symmetry (2D mesh)
@@ -210,15 +236,34 @@ class EchemSolver(ABC):
                 raise NotImplementedError(
                     'Cylindrical coordinates require a 2D mesh')
             r, z = SpatialCoordinate(mesh)
+            self.radius = r
+            self.inverse_radius = conditional(gt(r, 0), 1 / r, 0)
             _dx = CylindricalMeasure(r, 'cell')
             _ds = CylindricalMeasure(r, 'exterior_facet')
             _dS = CylindricalMeasure(r, 'interior_facet')
+        elif coordinates == "spherical":
+            print = PETSc.Sys.Print
+            print("Using spherical coordinates")
+            # Spherical coordinates with azimuthal symmetry (2D mesh).
+            if _mesh_topological_dimension(mesh) != 2:
+                raise NotImplementedError(
+                    'Spherical coordinates require a 2D mesh')
+            r, theta = SpatialCoordinate(mesh)
+            self.radius = r
+            self.polar_angle = theta
+            # Facets on the origin have zero physical area. Guard inverse
+            # metric factors there so a zero-area integral never evaluates 0/0.
+            self.inverse_radius = conditional(gt(r, 0), 1 / r, 0)
+            quadrature_degree = max(2 * p + 3, 6)
+            _dx = SphericalMeasure(r, theta, 'cell')
+            _ds = SphericalMeasure(r, theta, 'exterior_facet')
+            _dS = SphericalMeasure(r, theta, 'interior_facet')
         else:
             _dx = dx
             _ds = ds
             _dS = dS
 
-        def _internal_dx(subdomain_id=None, domain=None, degree=p+1):
+        def _internal_dx(subdomain_id=None, domain=None, degree=quadrature_degree):
             """Cell measure; degree=None lets UFL choose quadrature accuracy."""
             return _dx(
                 subdomain_id=subdomain_id,
@@ -227,36 +272,42 @@ class EchemSolver(ABC):
                 degree=degree)
 
         if mesh.layers:
+            if self.coordinates in ("cylindrical", "spherical"):
+                ds_vertical = _ds.reconstruct(integral_type="exterior_facet_vert")
+                dS_vertical = _dS.reconstruct(integral_type="interior_facet_vert")
+                dS_horizontal = _dS.reconstruct(integral_type="interior_facet_horiz")
+            else:
+                ds_vertical, dS_vertical, dS_horizontal = ds_v, dS_v, dS_h
             # This doesn't include top and bottom surfaces
             def _internal_ds(subdomain_id=None, domain=None):
-                return ds_v(
+                return ds_vertical(
                     subdomain_id=subdomain_id,
                     domain=domain,
                     scheme=quadrature_rule_face,
-                    degree=p+1)
+                    degree=quadrature_degree)
 
             def _internal_dS(subdomain_id=None, domain=None):
-                return dS_v(subdomain_id=subdomain_id,
+                return dS_vertical(subdomain_id=subdomain_id,
                             domain=domain,
                             scheme=quadrature_rule_face,
-                            degree=p+1) + dS_h(subdomain_id=subdomain_id,
+                            degree=quadrature_degree) + dS_horizontal(subdomain_id=subdomain_id,
                                                                 domain=domain,
                                                                 scheme=quadrature_rule_face,
-                                                                degree=p+1)
+                                                                degree=quadrature_degree)
         else:
             def _internal_ds(subdomain_id=None, domain=None):
                 return _ds(
                     subdomain_id=subdomain_id,
                     domain=domain,
                     scheme=quadrature_rule_face,
-                    degree=p+1)
+                    degree=quadrature_degree)
 
             def _internal_dS(subdomain_id=None, domain=None):
                 return _dS(
                     subdomain_id=subdomain_id,
                     domain=domain,
                     scheme=quadrature_rule_face,
-                    degree=p+1)
+                    degree=quadrature_degree)
 
         self.ds = _internal_ds
         self.dx = _internal_dx
@@ -401,6 +452,73 @@ class EchemSolver(ABC):
         self.u = u
 
         self.init_solver_parameters()
+
+    def grad(self, field):
+        """Scalar gradient in physical coordinate components.
+
+        The spherical inverse-radius guard supports weak-form integration but
+        does not compute the analytic limit at the origin. Supply the regular
+        limiting expression before point evaluation or nodal interpolation
+        there.
+        """
+        gradient = grad(field)
+        if self.coordinates == "spherical":
+            return as_vector((gradient[0], self.inverse_radius * gradient[1]))
+        return gradient
+
+    def div(self, field):
+        """Divergence of a vector expressed in physical components.
+
+        Inverse-metric guards support weak-form integration but do not compute
+        analytic limits at the cylindrical axis or spherical origin/poles.
+        Supply the regular limiting expression before point evaluation or
+        nodal interpolation on those singular boundaries.
+        """
+        if self.coordinates not in ("cylindrical", "spherical"):
+            return div(field)
+        # Differentiate the complete vector to retain the domain when a
+        # component is literal zero. Constant vectors may have no domain at all;
+        # their coordinate derivatives vanish, but the metric terms remain.
+        gradient = zero((2, 2)) if is_cellwise_constant(field) else grad(field)
+        if self.coordinates == "cylindrical":
+            return gradient[0, 0] + self.inverse_radius * field[0] + gradient[1, 1]
+        sine = sin(self.polar_angle)
+        cotangent = conditional(gt(sine, 0), cos(self.polar_angle) / sine, 0)
+        return (gradient[0, 0] + 2 * self.inverse_radius * field[0]
+                + self.inverse_radius * (gradient[1, 1] + cotangent * field[1]))
+
+    def facet_normal(self, mesh=None):
+        """Physical unit normal for a facet in the coordinate mesh."""
+        normal = FacetNormal(self.mesh if mesh is None else mesh)
+        if self.coordinates == "spherical":
+            transformed = as_vector((self.radius * normal[0], normal[1]))
+            length = sqrt(inner(transformed, transformed))
+            return conditional(gt(length, 0), transformed / length, normal)
+        return normal
+
+    def facet_cell_size(self, mesh=None):
+        """Cell thickness along a physical facet normal, for DG penalties."""
+        mesh = self.mesh if mesh is None else mesh
+        thickness = CellVolume(mesh) / FacetArea(mesh)
+        if self.coordinates == "spherical":
+            normal = FacetNormal(mesh)
+            scale = sqrt(normal[0]**2 + (self.inverse_radius * normal[1])**2)
+            # The radial normal has scale one even at the collapsed origin.
+            scale = conditional(gt(self.radius, 0), scale, 1)
+            thickness /= scale
+        return thickness
+
+    def streamline_cell_size(self, mesh, velocity, base_size=None):
+        """Convert a coordinate cell length to length along physical flow."""
+        if base_size is None:
+            base_size = sqrt(2) * CellVolume(mesh) / CellDiameter(mesh)
+        if self.coordinates == "spherical":
+            coordinate_velocity = as_vector((velocity[0], self.inverse_radius * velocity[1]))
+            coordinate_speed_squared = inner(coordinate_velocity, coordinate_velocity)
+            scale = conditional(gt(coordinate_speed_squared, 0),
+                                sqrt(inner(velocity, velocity) / coordinate_speed_squared), 1)
+            base_size *= scale
+        return base_size
 
     def setup_forms(self, us, v):
         """ Setup weak forms
@@ -1430,12 +1548,12 @@ class EchemSolver(ABC):
             pl = self.pl
             mu = self.physical_params["liquid viscosity"]
             krl = self.relative_permeability(Sl)
-            self.vel = -K / mu * krl * grad(pl)
+            self.vel = -K / mu * krl * self.grad(pl)
         if self.gas_params:
             krg = self.relative_permeability(1 - Sl)
             mug = self.physical_params["gas viscosity"]
             pg = self.pg
-            self.velg = -K / mug * krg * grad(pg)
+            self.velg = -K / mug * krg * self.grad(pg)
 
     def set_function_spaces(self, layers, family):
         """Set base function spaces
@@ -1502,9 +1620,9 @@ class EchemSolver(ABC):
 
         family = self.family
         mesh = self.mesh
-        n = FacetNormal(mesh)
+        n = self.facet_normal(mesh)
         if family == "DG":
-            he = CellVolume(mesh) / FacetArea(mesh)
+            he = self.facet_cell_size(mesh)
             D_IP = self.C_IP * max_value(self.penalty_degree**2, 1) / he
             K_IP = -1  # SIP
 
@@ -1531,21 +1649,23 @@ class EchemSolver(ABC):
         is_finite_size = any(search_string in f for f in self.flow)
         point_particle = is_finite_size and conc_params.get("point particle")
 
+        diffusive_flux = 0 * self.grad(C)
         if self.flow["diffusion"] or point_particle:
             # diffusion
-            a += inner(D * grad(C), grad(test_fn)) * self.dx()
+            diffusive_flux += D * self.grad(C)
+            a += inner(D * self.grad(C), self.grad(test_fn)) * self.dx()
             if family == "DG":
                 # Gamma_I
-                a += K_IP * inner(avg(D * grad(C)), jump(test_fn, n)) * self.dS()
-                a -= inner(avg(D * grad(test_fn)), jump(C, n)) * self.dS()
+                a += K_IP * inner(avg(D * self.grad(C)), jump(test_fn, n)) * self.dS()
+                a -= inner(avg(D * self.grad(test_fn)), jump(C, n)) * self.dS()
                 a += avg(D_IP * D) * jump(C) * jump(test_fn) * self.dS()
             # Gamma Inlet
             # bulk_dirichlet = inlet
             if bulk_dirichlet is not None:
                 if family == "DG":
-                    a += inner(D * (C_0 - C) * n, grad(test_fn)) * \
+                    a += inner(D * (C_0 - C) * n, self.grad(test_fn)) * \
                         self.ds(bulk_dirichlet)
-                    a -= inner(D * grad(C), n * test_fn) * self.ds(bulk_dirichlet)
+                    a -= inner(D * self.grad(C), n * test_fn) * self.ds(bulk_dirichlet)
                     a += inner(D_IP * D * (C - C_0) * n,
                                test_fn * n) * self.ds(bulk_dirichlet)
                 # else:
@@ -1553,8 +1673,8 @@ class EchemSolver(ABC):
 
             if gas is not None and C_gas is not None:
                 if family == "DG":
-                    a += inner(D * (C_gas - C) * n, grad(test_fn)) * self.ds(gas)
-                    a -= inner(D * grad(C), n * test_fn) * self.ds(gas)
+                    a += inner(D * (C_gas - C) * n, self.grad(test_fn)) * self.ds(gas)
+                    a -= inner(D * self.grad(C), n * test_fn) * self.ds(gas)
                     a += inner(D_IP * D * (C - C_gas) * n,
                                test_fn * n) * self.ds(gas)
                 # else:
@@ -1569,8 +1689,9 @@ class EchemSolver(ABC):
                     ai = self.conc_params[i].get("solvated diameter")
                     if ai is not None and ai != 0.0:
                         denominator -= NA * ai ** 3 * u[i]
-                        numerator += NA * ai ** 3 * grad(u[i])
-                a += D * C * inner(numerator / denominator, grad(test_fn)) * self.dx()
+                        numerator += NA * ai ** 3 * self.grad(u[i])
+                diffusive_flux += D * C * numerator / denominator
+                a += D * C * inner(numerator / denominator, self.grad(test_fn)) * self.dx()
 
         if self.flow["diffusion finite size_BK"] and not point_particle:
             NA = self.physical_params["Avogadro constant"]
@@ -1580,7 +1701,8 @@ class EchemSolver(ABC):
                 if ai is not None and ai != 0.0:
                     phi += NA * ai ** 3 * u[i]
             mu_ex = -ln(1 - phi)
-            a += D * C * inner(grad(ln(C) + mu_ex), grad(test_fn)) * self.dx()
+            diffusive_flux += D * C * self.grad(ln(C) + mu_ex)
+            a += D * C * inner(self.grad(ln(C) + mu_ex), self.grad(test_fn)) * self.dx()
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
 
@@ -1592,7 +1714,8 @@ class EchemSolver(ABC):
                 if ai is not None and ai != 0.0:
                     phi += NA * ai ** 3 * u[i]
             mu_ex = phi*(8 - 9*phi + 3*phi**2)/(1 - phi)**3
-            a += D * C * inner(grad(ln(C) + mu_ex), grad(test_fn)) * self.dx()
+            diffusive_flux += D * C * self.grad(ln(C) + mu_ex)
+            a += D * C * inner(self.grad(ln(C) + mu_ex), self.grad(test_fn)) * self.dx()
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
 
@@ -1604,7 +1727,8 @@ class EchemSolver(ABC):
                 if ai is not None and ai != 0.0:
                     phi += NA * ai ** 3 * u[i]
             mu_ex = -ln(1 - 8*phi)
-            a += D * C * inner(grad(ln(C) + mu_ex), grad(test_fn)) * self.dx()
+            diffusive_flux += D * C * self.grad(ln(C) + mu_ex)
+            a += D * C * inner(self.grad(ln(C) + mu_ex), self.grad(test_fn)) * self.dx()
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
 
@@ -1623,7 +1747,8 @@ class EchemSolver(ABC):
 
             mu_ex = - betaj * ln(1 - phi)
 
-            a += D * C * inner(grad(ln(C) + mu_ex), grad(test_fn)) * self.dx()
+            diffusive_flux += D * C * self.grad(ln(C) + mu_ex)
+            a += D * C * inner(self.grad(ln(C) + mu_ex), self.grad(test_fn)) * self.dx()
 
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
@@ -1651,7 +1776,8 @@ class EchemSolver(ABC):
                 + (3*psi2**3*ai**3)/(1 - psi3)**3 + ((3*psi2**2*ai**2)/(psi3))*((1-3*psi3*0.5)/(1-psi3)**2)  \
                 - (psi2**3 * ai**3)*(4*psi3**2 - 5*psi3 + 2)/(psi3**2*(1 - psi3)**3)
 
-            a += D * C * inner(grad(ln(C) + mu_ex), grad(test_fn)) * self.dx()
+            diffusive_flux += D * C * self.grad(ln(C) + mu_ex)
+            a += D * C * inner(self.grad(ln(C) + mu_ex), self.grad(test_fn)) * self.dx()
 
             if bulk_dirichlet is not None:
                 bcs.append(DirichletBC(self.W.sub(i_c), C_0, bulk_dirichlet))
@@ -1662,20 +1788,19 @@ class EchemSolver(ABC):
         if self.flow["advection"] or (self.flow["migration"] and z != 0.0):
             if self.flow["advection"] and (
                     self.flow["migration"] and z != 0.0):
-                flow = vel - K * grad(U)
+                flow = vel - K * self.grad(U)
             elif self.flow["migration"] and z != 0.0:
-                flow = - K * grad(U)
+                flow = - K * self.grad(U)
             elif self.flow["advection"]:
                 flow = vel
-            a -= inner(C * flow, grad(test_fn)) * self.dx()
+            a -= inner(C * flow, self.grad(test_fn)) * self.dx()
             if family == "DG":
                 # Gamma_I
                 flow_N = 0.5 * (dot(flow, n) + abs(dot(flow, n)))
                 a += (test_fn('+') - test_fn('-')) * \
                     (flow_N('+') * C('+') - flow_N('-') * C('-')) * self.dS()
             elif self.SUPG:  # SUPG
-                # hk = CellDiameter(mesh)
-                hk = sqrt(2) * CellVolume(mesh) / CellDiameter(mesh)
+                hk = self.streamline_cell_size(mesh, flow)
                 u_norm = inner(flow, flow) ** 0.5
                 Pe = hk / 2. * u_norm / D
                 # Pe_f = conditional(gt(Pe, 3), 1., Pe/3.) # Wang?
@@ -1683,11 +1808,16 @@ class EchemSolver(ABC):
                 # Pe_f = conditional(gt(Pe, 1), 1., Pe/3) # BrezziMariniRusso
                 delta_k = conditional(gt(u_norm, 0), hk / 2. / u_norm * Pe_f, 0)
                 self._supg_parameters[i_c] = (delta_k, flow)
-                # p = 1
-                a += delta_k * inner(dot(flow, grad(C)), dot(flow, grad(test_fn))) * self.dx()
+                if self.coordinates == "spherical":
+                    # Conservative spherical transport retains velocity
+                    # divergence and diffusion even for affine coordinate fields.
+                    residual = self.div(C * flow - diffusive_flux)
+                else:
+                    residual = dot(flow, self.grad(C))
+                a += delta_k * residual * dot(flow, self.grad(test_fn)) * self.dx()
                 if bulk_reaction is not None:
                     if bulk_reaction_term != 0:
-                        a -= bulk_reaction_term * delta_k * dot(flow, grad(test_fn)) * self.dx()
+                        a -= bulk_reaction_term * delta_k * dot(flow, self.grad(test_fn)) * self.dx()
 
             applied = self.boundary_markers.get("applied")
             liquid_applied = self.boundary_markers.get("liquid applied")
@@ -1783,49 +1913,52 @@ class EchemSolver(ABC):
 
         family = self.family
         mesh = self.mesh
-        n = FacetNormal(mesh)
+        n = self.facet_normal(mesh)
         if family == "DG":
-            he = CellVolume(mesh) / FacetArea(mesh)
+            he = self.facet_cell_size(mesh)
             D_IP = self.C_IP * max_value(self.penalty_degree**2, 1) / he
             K_IP = -1  # SIP
 
         a = 0.0
         bcs = []
 
+        diffusive_flux = 0 * self.grad(X)
         if self.flow["diffusion"]:
             # diffusion
-            a += inner(D * rhog * grad(X), grad(test_fn)) * self.dx()
+            diffusive_flux += D * rhog * self.grad(X)
+            a += inner(D * rhog * self.grad(X), self.grad(test_fn)) * self.dx()
             if family == "DG":
                 # Gamma_I
-                a += K_IP * inner(avg(D * rhog * grad(X)),
+                a += K_IP * inner(avg(D * rhog * self.grad(X)),
                                   jump(test_fn, n)) * self.dS()
-                a -= inner(avg(D * rhog * grad(test_fn)), jump(X, n)) * self.dS()
+                a -= inner(avg(D * rhog * self.grad(test_fn)), jump(X, n)) * self.dS()
                 a += avg(D_IP * D * rhog) * jump(X) * jump(test_fn) * self.dS()
             # mixture averaged term
             Davg = rhog * D * X / Mn
-            a += inner(Davg * grad(Mn), grad(test_fn)) * self.dx()
+            diffusive_flux += Davg * self.grad(Mn)
+            a += inner(Davg * self.grad(Mn), self.grad(test_fn)) * self.dx()
             if family == "DG":
                 # Gamma_I - what penalization terms do we want here?
-                a += K_IP * inner(avg(Davg * grad(Mn)),
+                a += K_IP * inner(avg(Davg * self.grad(Mn)),
                                   jump(test_fn, n)) * self.dS()
-                a -= inner(avg(Davg * grad(test_fn)), jump(Mn, n)) * self.dS()
+                a -= inner(avg(Davg * self.grad(test_fn)), jump(Mn, n)) * self.dS()
                 a += avg(D_IP * Davg) * jump(Mn) * jump(test_fn) * self.dS()
             # Gamma Inlet
             # if inlet is not None:
-            #    a += inner(D * rhog * (X_0 - X) * n, grad(test_fn)) * self.ds(inlet)
-            #    a -= inner(D * rhog * grad(X), n * test_fn) * self.ds(inlet)
+            #    a += inner(D * rhog * (X_0 - X) * n, self.grad(test_fn)) * self.ds(inlet)
+            #    a -= inner(D * rhog * self.grad(X), n * test_fn) * self.ds(inlet)
             #    a += inner(D_IP * D * rhog * (X - X_0) * n, test_fn * n) * self.ds(inlet)
             if gas is not None and X_gas is not None:
                 if family == "DG":
                     a += inner(D * rhog * (X_gas - X) * n,
-                               grad(test_fn)) * self.ds(gas)
-                    a -= inner(D * rhog * grad(X), n * test_fn) * self.ds(gas)
+                               self.grad(test_fn)) * self.ds(gas)
+                    a -= inner(D * rhog * self.grad(X), n * test_fn) * self.ds(gas)
                     a += inner(D_IP * D * rhog * (X - X_gas)
                                * n, test_fn * n) * self.ds(gas)
 
                     a += inner(Davg * (Mn_gas - Mn) * n,
-                               grad(test_fn)) * self.ds(gas)
-                    a -= inner(Davg * grad(Mn), n * test_fn) * self.ds(gas)
+                               self.grad(test_fn)) * self.ds(gas)
+                    a -= inner(Davg * self.grad(Mn), n * test_fn) * self.ds(gas)
                     a += inner(D_IP * Davg * (Mn - Mn_gas)
                                * n, test_fn * n) * self.ds(gas)
                 # else:
@@ -1833,20 +1966,23 @@ class EchemSolver(ABC):
         # convection
         if self.flow["advection"] or self.flow["advection gas only"]:
             flow = rhog * vel
-            a -= inner(X * flow, grad(test_fn)) * self.dx()
+            a -= inner(X * flow, self.grad(test_fn)) * self.dx()
             if family == "DG":
                 # Gamma_I
                 flow_N = 0.5 * (dot(flow, n) + abs(dot(flow, n)))
                 a += (test_fn('+') - test_fn('-')) * \
                     (flow_N('+') * X('+') - flow_N('-') * X('-')) * self.dS()
             elif self.SUPG:  # SUPG
-                hk = CellDiameter(mesh)
+                hk = self.streamline_cell_size(mesh, flow, CellDiameter(mesh))
                 u_norm = inner(flow, flow) ** 0.5
                 Pe = hk / 2. * u_norm / D
-                delta_k = hk / 2. / u_norm * \
-                    conditional(gt(Pe, 1), 1. - 1./Pe, 0)  # Wathen
-                # p = 1
-                a += delta_k * inner(dot(flow, grad(X)), dot(flow, grad(test_fn))) * self.dx()
+                delta_k = conditional(gt(u_norm, 0), hk / 2. / u_norm *
+                                      conditional(gt(Pe, 1), 1. - 1./Pe, 0), 0)
+                if self.coordinates == "spherical":
+                    residual = self.div(X * flow - diffusive_flux)
+                else:
+                    residual = dot(flow, self.grad(X))
+                a += delta_k * residual * dot(flow, self.grad(test_fn)) * self.dx()
             # Gamma Inlet
             if gas_inlet is not None:
                 if X_gas != 0.0:
@@ -1904,9 +2040,9 @@ class EchemSolver(ABC):
 
         family = self.family
         mesh = self.mesh
-        n = FacetNormal(mesh)
+        n = self.facet_normal(mesh)
         if family == "DG":
-            he = CellVolume(mesh) / FacetArea(mesh)
+            he = self.facet_cell_size(mesh)
             D_IP = self.C_IP * max_value(self.penalty_degree**2, 1) / he
             D_IP2 = self.C_IP * max_value(self.penalty_degreeU**2, 1) / he
             K_IP = -1  # SIP
@@ -1944,26 +2080,26 @@ class EchemSolver(ABC):
                 zDF = z * D * F * C_ND
                 if self.flow["diffusion"]:
                     # diffusion
-                    a += inner(zDF * grad(C), grad(test_fn)) * self.dx()
+                    a += inner(zDF * self.grad(C), self.grad(test_fn)) * self.dx()
                     if family == "DG":
                         # Gamma_I
-                        a += K_IP * inner(avg(zDF * grad(C)),
+                        a += K_IP * inner(avg(zDF * self.grad(C)),
                                           jump(test_fn, n)) * self.dS()
-                        a -= inner(avg(zDF * grad(test_fn)),
+                        a -= inner(avg(zDF * self.grad(test_fn)),
                                    jump(C, n)) * self.dS()
                         # a += avg(D_IP * abs(zDF)) * jump(C) * jump(test_fn) * self.dS()
                         # Gamma Inlet
                         if bulk_dirichlet is not None:
                             a += inner(zDF * (C_0 - C) * n,
-                                       grad(test_fn)) * self.ds(bulk_dirichlet)
-                            a -= inner(zDF * grad(C), n * test_fn) * \
+                                       self.grad(test_fn)) * self.ds(bulk_dirichlet)
+                            a -= inner(zDF * self.grad(C), n * test_fn) * \
                                 self.ds(bulk_dirichlet)
                             # a += inner(D_IP * abs(zDF) * (C - C_0)
                             #           * n, test_fn * n) * self.ds(inlet)
                         if gas is not None and C_gas is not None:
                             a += inner(zDF * (C_gas - C) * n,
-                                       grad(test_fn)) * self.ds(gas)
-                            a -= inner(zDF * grad(C), n * test_fn) * self.ds(gas)
+                                       self.grad(test_fn)) * self.ds(gas)
+                            a -= inner(zDF * self.grad(C), n * test_fn) * self.ds(gas)
                 if bulk_reaction is not None:
                     if reactions[i] != 0.0:
                         a -= C_ND * z * F * reactions[i] * test_fn * self.dx()
@@ -1998,11 +2134,11 @@ class EchemSolver(ABC):
                         self.neumann(C, conc_params[i], u) * self.ds(neumann)
 
         # diffusion of potential
-        a += inner(K_U * grad(U), grad(test_fn)) * self.dx()
+        a += inner(K_U * self.grad(U), self.grad(test_fn)) * self.dx()
         if family == "DG":
             # Gamma_I
-            a += K_IP * inner(avg(K_U * grad(U)), jump(test_fn, n)) * self.dS()
-            a -= inner(avg(K_U * grad(test_fn)), jump(U, n)) * self.dS()
+            a += K_IP * inner(avg(K_U * self.grad(U)), jump(test_fn, n)) * self.dS()
+            a -= inner(avg(K_U * self.grad(test_fn)), jump(U, n)) * self.dS()
             a += avg(D_IP2 * K_U) * jump(U) * jump(test_fn) * self.dS()
 
         is_bulk = (bulk is not None)
@@ -2023,8 +2159,8 @@ class EchemSolver(ABC):
             U_0 = diric[1]
 
             if family == "DG":
-                a += inner(K_U * (U_0 - U) * n, grad(test_fn)) * self.ds(dirichlet)
-                a -= inner(K_U * grad(U), n * test_fn) * self.ds(dirichlet)
+                a += inner(K_U * (U_0 - U) * n, self.grad(test_fn)) * self.ds(dirichlet)
+                a -= inner(K_U * self.grad(U), n * test_fn) * self.ds(dirichlet)
                 a += inner(D_IP2 * K_U * (U - U_0)
                            * n, test_fn * n) * self.ds(dirichlet)
             # else:
@@ -2086,9 +2222,9 @@ class EchemSolver(ABC):
 
         family = self.family
         mesh = self.mesh
-        n = FacetNormal(mesh)
+        n = self.facet_normal(mesh)
         if family == "DG":
-            he = CellVolume(mesh) / FacetArea(mesh)
+            he = self.facet_cell_size(mesh)
             D_IP = self.C_IP * max_value(self.penalty_degree**2, 1) / he
             D_IP2 = self.C_IP * max_value((self.penalty_degreeU)**2, 1) / he
             K_IP = -1  # SIP
@@ -2191,11 +2327,11 @@ class EchemSolver(ABC):
 
 
         # diffusion of potential
-        a += inner(K_U * grad(U), grad(test_fn)) * self.dx()
+        a += inner(K_U * self.grad(U), self.grad(test_fn)) * self.dx()
         if family == "DG":
             # Gamma_I
-            a += K_IP * inner(avg(K_U * grad(U)), jump(test_fn, n)) * self.dS()
-            a -= inner(avg(K_U * grad(test_fn)), jump(U, n)) * self.dS()
+            a += K_IP * inner(avg(K_U * self.grad(U)), jump(test_fn, n)) * self.dS()
+            a -= inner(avg(K_U * self.grad(test_fn)), jump(U, n)) * self.dS()
             a += avg(D_IP2 * K_U) * jump(U) * jump(test_fn) * self.dS()
 
         if (bulk_reaction is not None):  # and self.flow["poisson"]:
@@ -2227,8 +2363,8 @@ class EchemSolver(ABC):
             U_0 = diric[1]
 
             if family == "DG":
-                a += inner(K_U * (U_0 - U) * n, grad(test_fn)) * self.ds(dirichlet)
-                a -= inner(K_U * grad(U), n * test_fn) * self.ds(dirichlet)
+                a += inner(K_U * (U_0 - U) * n, self.grad(test_fn)) * self.ds(dirichlet)
+                a -= inner(K_U * self.grad(U), n * test_fn) * self.ds(dirichlet)
                 a += inner(D_IP2 * K_U * (U - U_0)
                            * n, test_fn * n) * self.ds(dirichlet)
             # else:
@@ -2271,9 +2407,9 @@ class EchemSolver(ABC):
 
         family = self.family
         mesh = self.mesh
-        n = FacetNormal(mesh)
+        n = self.facet_normal(mesh)
         if family == "DG":
-            he = CellVolume(mesh) / FacetArea(mesh)
+            he = self.facet_cell_size(mesh)
             D_IP = self.C_IP * max_value(self.penalty_degree**2, 1) / he
             D_IP2 = self.C_IP * max_value((self.penalty_degreep)**2, 1) / he
             D_IP3 = self.C_IP * max_value((self.penalty_degreeU)**2, 1) / he
@@ -2296,11 +2432,11 @@ class EchemSolver(ABC):
         K_p = rho * K * krl / mu  # mobility
 
         # diffusion for pressure
-        a += inner(K_p * grad(p), grad(test_fn)) * self.dx()
+        a += inner(K_p * self.grad(p), self.grad(test_fn)) * self.dx()
         if family == "DG":
             # Gamma_I
-            a += K_IP * inner(avg(K_p * grad(p)), jump(test_fn, n)) * self.dS()
-            a -= inner(avg(K_p * grad(test_fn)), jump(p, n)) * self.dS()
+            a += K_IP * inner(avg(K_p * self.grad(p)), jump(test_fn, n)) * self.dS()
+            a -= inner(avg(K_p * self.grad(test_fn)), jump(p, n)) * self.dS()
             a += avg(D_IP2 * K_p) * jump(p) * jump(test_fn) * self.dS()
 
         dirichlet = None
@@ -2314,8 +2450,8 @@ class EchemSolver(ABC):
         if dirichlet is not None:
             p_0 = self.physical_params["p_gas"]
             if family == "DG":
-                a += inner(K_p * (p_0 - p) * n, grad(test_fn)) * self.ds(dirichlet)
-                a -= inner(K_p * grad(p), n * test_fn) * self.ds(dirichlet)
+                a += inner(K_p * (p_0 - p) * n, self.grad(test_fn)) * self.ds(dirichlet)
+                a -= inner(K_p * self.grad(p), n * test_fn) * self.ds(dirichlet)
                 a += inner(D_IP2 * K_p * (p - p_0)
                            * n, test_fn * n) * self.ds(dirichlet)
             # else:
@@ -2359,11 +2495,11 @@ class EchemSolver(ABC):
                     self.neumann(C, conc_params[i], u) * self.ds(neumann)
 
         # diffusion of potential
-        a += inner(K_U * grad(U), grad(test_fn)) * self.dx()
+        a += inner(K_U * self.grad(U), self.grad(test_fn)) * self.dx()
         if family == "DG":
             # Gamma_I
-            a += K_IP * inner(avg(K_U * grad(U)), jump(test_fn, n)) * self.dS()
-            a -= inner(avg(K_U * grad(test_fn)), jump(U, n)) * self.dS()
+            a += K_IP * inner(avg(K_U * self.grad(U)), jump(test_fn, n)) * self.dS()
+            a -= inner(avg(K_U * self.grad(test_fn)), jump(U, n)) * self.dS()
             # a += avg(D_IP3 * K_U) * jump(U) * jump(test_fn) * self.dS()
 
             is_bulk = (bulk is not None)
@@ -2378,8 +2514,8 @@ class EchemSolver(ABC):
                 elif is_bulk:
                     U_0 = Constant(0)
                     dirichlet = bulk
-                a += inner(K_U * (U_0 - U) * n, grad(test_fn)) * self.ds(dirichlet)
-                a -= inner(K_U * grad(U), n * test_fn) * self.ds(dirichlet)
+                a += inner(K_U * (U_0 - U) * n, self.grad(test_fn)) * self.ds(dirichlet)
+                a -= inner(K_U * self.grad(U), n * test_fn) * self.ds(dirichlet)
                 # a += inner(D_IP3 * K_U * (U - U_0)
                 #           * n, test_fn * n) * self.ds(dirichlet)
 
@@ -2420,9 +2556,9 @@ class EchemSolver(ABC):
 
         family = self.family
         mesh = self.mesh
-        n = FacetNormal(mesh)
+        n = self.facet_normal(mesh)
         if family == "DG":
-            he = CellVolume(mesh) / FacetArea(mesh)
+            he = self.facet_cell_size(mesh)
             D_IP2 = self.C_IP * max_value(self.penalty_degreep**2, 1) / he
             K_IP = -1  # SIP
 
@@ -2431,31 +2567,31 @@ class EchemSolver(ABC):
 
         if self.flow["diffusion"]:
             # diffusion
-            a += inner(D * rhog * grad(X), grad(test_fn)) * self.dx()
+            a += inner(D * rhog * self.grad(X), self.grad(test_fn)) * self.dx()
             if family == "DG":
                 # Gamma_I
-                a += K_IP * inner(avg(D * rhog * grad(X)),
+                a += K_IP * inner(avg(D * rhog * self.grad(X)),
                                   jump(test_fn, n)) * self.dS()
-                a -= inner(avg(D * rhog * grad(test_fn)), jump(X, n)) * self.dS()
+                a -= inner(avg(D * rhog * self.grad(test_fn)), jump(X, n)) * self.dS()
                 # a += avg(D_IP * D * rhog) * jump(X) * jump(test_fn) * self.dS()
             # mixture averaged term
             Davg = rhog * D * X / Mn
-            a += inner(Davg * grad(Mn), grad(test_fn)) * self.dx()
+            a += inner(Davg * self.grad(Mn), self.grad(test_fn)) * self.dx()
             if family == "DG":
                 # Gamma_I - what penalization terms do we want here?
-                a += K_IP * inner(avg(Davg * grad(Mn)),
+                a += K_IP * inner(avg(Davg * self.grad(Mn)),
                                   jump(test_fn, n)) * self.dS()
-                a -= inner(avg(Davg * grad(test_fn)), jump(Mn, n)) * self.dS()
+                a -= inner(avg(Davg * self.grad(test_fn)), jump(Mn, n)) * self.dS()
                 # a += avg(D_IP * Davg) * jump(Mn) * jump(test_fn) * self.dS()
                 if gas is not None and X_gas is not None:
                     a += inner(D * rhog * (X_gas - X) * n,
-                               grad(test_fn)) * self.ds(gas)
-                    a -= inner(D * rhog * grad(X), n * test_fn) * self.ds(gas)
+                               self.grad(test_fn)) * self.ds(gas)
+                    a -= inner(D * rhog * self.grad(X), n * test_fn) * self.ds(gas)
                     # a += inner(D_IP * D * rhog * (X - X_gas) * n, test_fn * n) * self.ds(gas)
 
                     a += inner(Davg * (Mn_gas - Mn) * n,
-                               grad(test_fn)) * self.ds(gas)
-                    a -= inner(Davg * grad(Mn), n * test_fn) * self.ds(gas)
+                               self.grad(test_fn)) * self.ds(gas)
+                    a -= inner(Davg * self.grad(Mn), n * test_fn) * self.ds(gas)
                     # a += inner(D_IP * Davg * (Mn - Mn_gas) * n, test_fn * n) * self.ds(gas)
 
         # convection
@@ -2466,17 +2602,17 @@ class EchemSolver(ABC):
         K_p = rhog * X * K * krg / mu  # mobility
 
         # formulated as elliptic for pressure
-        a += inner(K_p * grad(p), grad(test_fn)) * self.dx()
+        a += inner(K_p * self.grad(p), self.grad(test_fn)) * self.dx()
         if family == "DG":
             # Gamma_I
-            a += K_IP * inner(avg(K_p * grad(p)), jump(test_fn, n)) * self.dS()
-            a -= inner(avg(K_p * grad(test_fn)), jump(p, n)) * self.dS()
+            a += K_IP * inner(avg(K_p * self.grad(p)), jump(test_fn, n)) * self.dS()
+            a -= inner(avg(K_p * self.grad(test_fn)), jump(p, n)) * self.dS()
             a += avg(D_IP2 * K_p) * jump(p) * jump(test_fn) * self.dS()
         if gas_inlet is not None:
             p_0 = self.physical_params["p_gas"]
             if family == "DG":
-                a += inner(K_p * (p_0 - p) * n, grad(test_fn)) * self.ds(gas_inlet)
-                a -= inner(K_p * grad(p), n * test_fn) * self.ds(gas_inlet)
+                a += inner(K_p * (p_0 - p) * n, self.grad(test_fn)) * self.ds(gas_inlet)
+                a -= inner(K_p * self.grad(p), n * test_fn) * self.ds(gas_inlet)
                 a += inner(D_IP2 * K_p * (p - p_0)
                            * n, test_fn * n) * self.ds(gas_inlet)
             # else:
@@ -2536,9 +2672,9 @@ class EchemSolver(ABC):
 
         family = self.family
         mesh = self.mesh
-        n = FacetNormal(mesh)
+        n = self.facet_normal(mesh)
         if family == "degree":
-            he = CellVolume(mesh) / FacetArea(mesh)
+            he = self.facet_cell_size(mesh)
             D_IP = self.C_IP * max_value(self.penalty_degree**2, 1) / he
             D_IP2 = self.C_IP * max_value((self.penalty_degreep)**2, 1) / he
             K_IP = -1  # SIP
@@ -2582,17 +2718,17 @@ class EchemSolver(ABC):
         K_p = rho * K * krg / mu  # mobility
 
         # diffusion for pressure
-        a += inner(K_p * grad(p), grad(test_fn)) * self.dx()
+        a += inner(K_p * self.grad(p), self.grad(test_fn)) * self.dx()
         if family == "DG":
             # Gamma_I
-            a += K_IP * inner(avg(K_p * grad(p)), jump(test_fn, n)) * self.dS()
-            a -= inner(avg(K_p * grad(test_fn)), jump(p, n)) * self.dS()
+            a += K_IP * inner(avg(K_p * self.grad(p)), jump(test_fn, n)) * self.dS()
+            a -= inner(avg(K_p * self.grad(test_fn)), jump(p, n)) * self.dS()
             a += avg(D_IP2 * K_p) * jump(p) * jump(test_fn) * self.dS()
         if gas is not None:
             p_0 = self.physical_params["p_gas"]
             if family == "DG":
-                a += inner(K_p * (p_0 - p) * n, grad(test_fn)) * self.ds(gas)
-                a -= inner(K_p * grad(p), n * test_fn) * self.ds(gas)
+                a += inner(K_p * (p_0 - p) * n, self.grad(test_fn)) * self.ds(gas)
+                a -= inner(K_p * self.grad(p), n * test_fn) * self.ds(gas)
                 a += inner(D_IP2 * K_p * (p - p_0)
                            * n, test_fn * n) * self.ds(gas)
             # else:
@@ -2625,6 +2761,8 @@ class EchemSolver(ABC):
         """Set velocity
 
         This method should set self.vel as a Firedrake vector quantity.
+        In spherical coordinates its entries are physical radial and polar
+        velocities, rather than rates of change of the mesh coordinates.
         """
         raise NotImplementedError('method needs to be implemented by solver')
 
@@ -2637,7 +2775,7 @@ class EchemSolver(ABC):
             u: full solution state
 
         Returns:
-            normal flux for species i
+            physical normal flux for species i, per unit physical surface area
         """
         raise NotImplementedError('method needs to be implemented by solver')
 
@@ -2715,8 +2853,8 @@ class TransientEchemSolver(EchemSolver):
         print("Adding accum form")
 
         rate = (C - C_old) / self.dt
-        # Estimate quadrature from the complete weighted integrand. The steady
-        # p+1 rule can miss nonzero higher-order mass modes.
+        # Estimate quadrature from the complete weighted integrand. The fixed
+        # steady rule can miss nonzero higher-order mass modes.
         a = rate * test_fn * self.dx(degree=None)
         if self.family == "CG" and self.SUPG:
             parameters = self._supg_parameters.get(conc_params["i_c"])
@@ -2724,7 +2862,7 @@ class TransientEchemSolver(EchemSolver):
                 delta_k, flow = parameters
                 # Use the steady SUPG source term's velocity, coefficient,
                 # and quadrature for the time derivative as well.
-                a += rate * delta_k * dot(flow, grad(test_fn)) * self.dx()
+                a += rate * delta_k * dot(flow, self.grad(test_fn)) * self.dx()
         return a, []
 
     def update(self):
