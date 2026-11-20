@@ -113,6 +113,8 @@ class EchemSolver(ABC):
                      }
 
         self.SUPG = SUPG
+        # Filled by the steady mass forms and reused by transient accumulation.
+        self._supg_parameters = {}
         self.save_solutions = True  # hidden option
 
         for physics in physical_params["flow"]:
@@ -216,12 +218,13 @@ class EchemSolver(ABC):
             _ds = ds
             _dS = dS
 
-        def _internal_dx(subdomain_id=None, domain=None):
+        def _internal_dx(subdomain_id=None, domain=None, degree=p+1):
+            """Cell measure; degree=None lets UFL choose quadrature accuracy."""
             return _dx(
                 subdomain_id=subdomain_id,
                 domain=domain,
                 scheme=quadrature_rule,
-                degree=p+1)
+                degree=degree)
 
         if mesh.layers:
             # This doesn't include top and bottom surfaces
@@ -1678,7 +1681,8 @@ class EchemSolver(ABC):
                 # Pe_f = conditional(gt(Pe, 3), 1., Pe/3.) # Wang?
                 Pe_f = conditional(gt(Pe, 1), 1. - 1./Pe, 0)  # ElmanSilvesterWathen
                 # Pe_f = conditional(gt(Pe, 1), 1., Pe/3) # BrezziMariniRusso
-                delta_k = hk / 2. / u_norm * Pe_f
+                delta_k = conditional(gt(u_norm, 0), hk / 2. / u_norm * Pe_f, 0)
+                self._supg_parameters[i_c] = (delta_k, flow)
                 # p = 1
                 a += delta_k * inner(dot(flow, grad(C)), dot(flow, grad(test_fn))) * self.dx()
                 if bulk_reaction is not None:
@@ -2710,7 +2714,17 @@ class TransientEchemSolver(EchemSolver):
         print = PETSc.Sys.Print
         print("Adding accum form")
 
-        a = (C - C_old) / self.dt * test_fn * dx()
+        rate = (C - C_old) / self.dt
+        # Estimate quadrature from the complete weighted integrand. The steady
+        # p+1 rule can miss nonzero higher-order mass modes.
+        a = rate * test_fn * self.dx(degree=None)
+        if self.family == "CG" and self.SUPG:
+            parameters = self._supg_parameters.get(conc_params["i_c"])
+            if parameters is not None:
+                delta_k, flow = parameters
+                # Use the steady SUPG source term's velocity, coefficient,
+                # and quadrature for the time derivative as well.
+                a += rate * delta_k * dot(flow, grad(test_fn)) * self.dx()
         return a, []
 
     def update(self):

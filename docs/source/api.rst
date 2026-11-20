@@ -10,6 +10,16 @@ EchemSolver classes
 .. autoclass:: echemfem.TransientEchemSolver
    :members:
 
+Transient accumulation uses the coordinate volume weight and automatic
+quadrature based on the complete integrand. This retains higher-order mass
+terms without changing the quadrature used for steady forms. In custom
+forms, ``self.dx(degree=None)`` selects automatic quadrature, while
+``self.dx(degree=k)`` requests degree ``k`` explicitly.
+
+For CG with SUPG enabled, time accumulation is included in the stabilization
+using the same transport velocity and stabilization coefficient as the steady
+species equation. DG accumulation does not add SUPG terms.
+
 FlowSolver classes
 -------------------
 
